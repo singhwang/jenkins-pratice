@@ -1,0 +1,360 @@
+# 安装docker
+# https://yq.aliyun.com/articles/110806?spm=5176.8351553.0.0.7e4d1991yETOzt
+
+# 搭建gitlab
+# https://www.jianshu.com/p/5aec74d49555
+# https://hub.docker.com/r/gitlab/gitlab-ce
+# https://docs.gitlab.com/omnibus/docker/
+
+docker run --detach \
+  --hostname 172.16.170.134 \
+  --publish 443:443 --publish 80:80 --publish 8022:22 \
+  --env GITLAB_OMNIBUS_CONFIG="external_url 'http://172.16.170.134/'; gitlab_rails['gitlab_shell_ssh_port'] = 8022;" \
+  --name gitlab \
+  --restart always \
+  --volume /srv/gitlab/config:/etc/gitlab \
+  --volume /srv/gitlab/logs:/var/log/gitlab \
+  --volume /srv/gitlab/data:/var/opt/gitlab \
+  gitlab/gitlab-ce:11.9.9-ce.0
+
+
+# 搭建jenkins
+# https://jenkins.io/download/
+# https://hub.docker.com/r/jenkins/jenkins
+# https://github.com/jenkinsci/docker/blob/master/README.md
+
+docker run -p 8080:8080 -p 50000:50000 -d --name jenkins jenkins/jenkins:2.263.3-lts
+
+# Jenkins 2.263.3-lts
+# admin
+# cat /var/jenkins_home/secrets/initialAdminPassword
+# 设置默认语言：https://blog.csdn.net/nklinsirui/article/details/89576475
+
+# Jenkins API Usage https://jouyouyun.github.io/post/jenkins-api-usage/
+# https://www.cnblogs.com/zjsupermanblog/p/7238422.html
+# 配置http代理 https://docs.docker.com/config/daemon/systemd/
+
+# Jenkins Master Docker Image
+# https://github.com/jenkinsci/docker
+
+# Example content for plugins.txt
+# 以下内容需要借助官方文档搜索对应的plugin或者Id和Version
+ant:1.11
+build-timeout:1.20
+email-ext:2.81
+github-branch-source:2.9.5
+gradle:1.36
+kubernetes:1.29.0
+ldap:1.26
+locale:1.4
+localization-zh-cn:1.0.24
+matrix-auth:2.6.5
+antisamy-markup-formatter:2.1
+pam-auth:1.6
+workflow-aggregator:2.6
+pipeline-github-lib:1.0
+ssh-slaves:1.31.5
+subversion:2.14.0
+timestamper:1.11.8
+ws-cleanup:0.38
+gitlab-plugin:1.5.13
+command-launcher:1.5
+jdk-tool:1.4
+
+
+# Jenkins Agent Docker Image
+https://github.com/jenkinsci/docker-inbound-agent/blob/3.29-1/Dockerfile
+https://blog.csdn.net/felix_yujing/article/details/78725142
+
+# Pipeline Base Example
+pipeline {
+    agent any
+    
+    stages {
+        stage('build') {
+            steps {
+                echo 'Buliding ... '
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                echo 'Testing ... '
+            }
+        }
+        
+        stage('Deploy') {
+            steps {
+                echo 'Deploying ... '
+            }
+        }
+    }
+}
+
+
+# Java Maven Pipeline Example
+pipeline {
+    agent any
+
+    tools {
+        maven 'mvn-3.5.4'
+    }
+
+    stages {
+        stage('build') {
+            steps {
+            	sh 'mvn clean package spring-boot:repackage'
+            	sh 'printenv'
+                echo 'Bulid. '
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Build Java Maven successfully.'
+        }
+    }
+
+}
+
+# Golang Pipeline Example
+pipeline {
+    agent any
+
+    environment {
+    	GOPATH="${env.WORKSPACE}/"
+    }
+
+    tools {
+        go 'go-1.11'
+    }
+
+    stages {
+        stage('build') {
+            steps {
+            	sh 'go version'
+            	sh 'printenv'
+            	sh 'cd $PWD/src/xxx.com/baas/bmas/ && go build -v .'
+                echo 'Bulid. '
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Build Golang successfully.'
+        }
+    }
+
+}
+
+# Golang Pipeline Example（设置git clone后的目录）
+pipeline {
+    agent any
+
+    environment {
+    	GOPATH="${env.WORKSPACE}/"
+    }
+    
+    options {
+        checkoutToSubdirectory('src/xxx.com/baas/bmas/')
+    }
+
+    tools {
+        go 'go-1.11'
+    }
+
+    stages {
+        stage('build') {
+            steps {
+            	sh 'go version'
+            	sh 'printenv'
+            	sh 'cd $PWD/src/xxx.com/baas/bmas/ && go build -v .'
+                echo 'Bulid. '
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Build Golang successfully.'
+        }
+    }
+
+}
+
+# 基于Kubernetes和Docker实现的Agent动态供给
+pipeline {
+    agent {
+    	kubernetes {
+		    label 'jenkins-agent-jnlp-golang'
+    	}
+    }
+
+    environment {
+    	GOPATH = "${env.WORKSPACE}"
+    	PROJECT_PATH = "${env.GOPATH}/src/xxx.com/baas/bmas"
+    	VERSION = "v1.2.${env.BUILD_NUMBER}"
+    	REGISTRY_CREDS = credentials('registry')
+    }
+
+    options {
+        checkoutToSubdirectory('src/xxx.com/baas/bmas/')
+    }
+
+    stages {
+	    stage('Build Binary File') {
+	    	steps {
+	    		echo "... Build Binary File ... "
+	    		sh 'printenv'
+	    		sh 'go version'
+	    		sh 'cd ${PROJECT_PATH}/ && go build -v -o build/bmas/bmas .'
+	    	}
+	    }
+
+	    stage('Build Docker Image') {
+	    	steps {
+	    		echo "... Build Docker Image ... "
+	    		sh 'cd ${PROJECT_PATH}/build/bmas/ && docker build -t wangx/bmas:${VERSION} .'
+	    	}
+	    }
+
+	    stage('Push Docker Image') {
+	    	steps {
+	    		echo "... Push Docker Image ... "
+	    		sh 'docker login -u ${REGISTRY_CREDS_USR} -p ${REGISTRY_CREDS_PSW}'
+	    		sh 'docker push wangx/bmas:${VERSION}'
+	    		sh 'docker logout'
+	    	}
+	    }
+
+	    stage('Clean Local Build Docker Image') {
+	    	steps {
+	    		echo "... Clean Local Temp Docker Image ... "
+	    		sh 'docker rmi wangx/bmas:${VERSION}'
+	    	}
+	    }
+
+	    stage('Generate Deploy YAML Files For Kubernetes') {
+	    	steps {
+	    		echo "... Generate Deploy YAML Files For Kubernetes ... "
+	    		sh 'cd ${PROJECT_PATH}/deploy/bmas/ && mkdir -p kubernetes/'
+	    		sh 'cd ${PROJECT_PATH}/deploy/bmas/ && cp -r templates/* kubernetes/'
+	    		sh 'cd ${PROJECT_PATH}/deploy/bmas/ && sed "s#<IMAGE_NAME>#wangx/bmas:${VERSION}#" templates/02-deployment.yaml > kubernetes/02-deployment.yaml'
+	    		sh 'cat ${PROJECT_PATH}/deploy/bmas/kubernetes/02-deployment.yaml'
+	    	}
+	    }
+	    
+	    stage('Execute Deploy YAML Files To Kubernetes') {
+	    	steps {
+	        	sh 'kubectl delete -f ${PROJECT_PATH}/deploy/bmas/kubernetes/'
+	    		echo "... Execute Deploy YAML Files To Kubernetes ... "
+	    		sh 'kubectl apply -f ${PROJECT_PATH}/deploy/bmas/kubernetes/'
+	    	}
+	    }
+	    
+	    stage('Clean Deploy YAML Files For Kubernetes') {
+	    	steps {
+	    		echo "... Clean Deploy YAML Files For Kubernetes ... "
+	    		sh 'rm -rf ${PROJECT_PATH}/deploy/bmas/kubernetes/'
+	    	}
+	    } 
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            echo 'Pipeline execute successfully.'
+            emailext body: """<p>EXECUTED: Job <b>\'${env.JOB_NAME}:${env.BUILD_NUMBER}\'</b></p><p>View console output at "<a href='${env.BUILD_URL}'>${env.JOB_NAME}:${env.BUILD_NUMBER}</a>"</p><p><i>(Build log is attached.)</i></p>""", compressLog: true, attachLog: true, recipientProviders: [culprits(), developers(), brokenBuildSuspects(), requestor()], replyTo: "wangxin_0611@126.com", subject: "Status: ${currentBuild.result?:'SUCCESS'} - Job \'${env.JOB_NAME}:${env.BUILD_NUMBER}\'", to: "wangxin_0611@126.com"
+        }
+        failure {
+            echo 'Pipeline execute failure.'
+            emailext body: """<p>EXECUTED: Job <b>\'${env.JOB_NAME}:${env.BUILD_NUMBER}\'</b></p><p>View console output at "<a href='${env.BUILD_URL}'>${env.JOB_NAME}:${env.BUILD_NUMBER}</a>"</p><p><i>(Build log is attached.)</i></p>""", compressLog: true, attachLog: true, recipientProviders: [culprits(), developers(), brokenBuildSuspects(), requestor()], replyTo: "wangxin_0611@126.com", subject: "Status: ${currentBuild.result?:'SUCCESS'} - Job \'${env.JOB_NAME}:${env.BUILD_NUMBER}\'", to: "wangxin_0611@126.com"
+        }
+    }
+}
+
+# 内置Email 配置示例
+            mail body: 'bmas pipeline execute successfully.', from: 'wangxin_0611@126.com', subject: 'build status', to: 'wangxin_0611@126.com'
+# Email Extension 配置示例
+            emailext body: """<p>EXECUTED: Job <b>\'${env.JOB_NAME}:${env.BUILD_NUMBER}\'</b></p><p>View console output at "<a href='${env.BUILD_URL}'>${env.JOB_NAME}:${env.BUILD_NUMBER}</a>"</p><p><i>(Build log is attached.)</i></p>""", compressLog: true, attachLog: true, recipientProviders: [culprits(), developers(), brokenBuildSuspects(), requestor()], replyTo: "wangxin_0611@126.com", subject: "Status: ${currentBuild.result?:'SUCCESS'} - Job \'${env.JOB_NAME}:${env.BUILD_NUMBER}\'", to: "wangxin_0611@126.com"
+
+
+# 安装被墙的工具，如何让docker翻墙？
+[Service]
+Environment="HTTP_PROXY=http://192.168.31.253:1087" "HTTPS_PROXY=http://192.168.31.253:108"
+
+# /etc/docker/daemon.json配置示例
+{
+  "insecure-registries": ["10.0.55.126","ccr.ccs.tencentyun.com"],
+  "dns": ["10.96.0.10","10.1.20.11"],
+  "dns-search": ["default.svc.cluster.local","svc.cluster.local"],
+  "dns-opts": ["ndots:2","timeout:2","attempts:2"],
+  "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2375"],
+  "log-driver":"json-file",
+  "log-opts": {
+     "max-size": "10m",
+     "max-file": "3"
+  }
+}
+
+# 指明使用哪个Agent的Pipeline Example
+pipeline {
+    agent {
+    	node {
+    		label 'jenkins-agent-jnlp'
+    	}
+    }
+
+    stages {
+	    stage('Clone') {
+	    	steps {
+	    		echo "1.Clone Stage"
+	    	}
+	    }
+	    stage('Test') {
+	    	steps {
+	    		echo "2.Test Stage"
+	    	}	      
+	    }
+	    stage('Build') {
+	    	steps {
+	    		echo "3.Build Stage"
+	    	}
+	    }
+	    stage('Deploy') {
+	    	steps {
+	    		echo "4. Deploy Stage"
+	    	}
+	    }
+    }
+
+    post {
+        success {
+            echo 'Pipeline execute successfully.'
+        }
+    }
+
+}
+
+# 在Pipeline中写明代码仓库
+checkout([$class: 'GitSCM', branches: [[name: '*/master']],
+     userRemoteConfigs: [[url: 'ssh://git@172.16.170.134:8022/root/bmas.git']]])
+
+
+# 参考资料
+https://www.qikqiak.com/k8s-book/docs/36.Jenkins%20Slave.html
+https://www.qikqiak.com/k8s-book/docs/37.Jenkins%20Pipeline.html
+https://www.jianshu.com/p/1440b5b4b980
+https://www.cnblogs.com/leolztang/p/6934694.html
+https://www.cnblogs.com/sos-blue/p/6821023.html
+https://blog.csdn.net/felix_yujing/article/details/78725142
+https://blog.csdn.net/qq351469076/article/details/80138342
+https://blog.csdn.net/dingshuangyong/article/details/77530461
+https://www.e-learn.cn/content/wangluowenzhang/631935
+https://www.meiwen.com.cn/subject/avpmkqtx.html
+https://www.e-learn.cn/content/qita/2358564
+

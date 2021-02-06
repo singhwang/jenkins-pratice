@@ -1,0 +1,233 @@
+pipeline {
+    agent {
+      kubernetes {
+        yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    jenkins: "jenkins-agent-jnlp-golang"
+    jenkins/label: "jenkins-agent-jnlp-golang"
+spec:
+  containers:
+  - image: "core.harbor.xxx.com/jenkins/jenkins-inbound-agent-golang:4.6-1-1.15.3"
+    imagePullPolicy: "IfNotPresent"
+    name: "jnlp"
+    tty: true
+    volumeMounts:
+    - mountPath: "/var/run/docker.sock"
+      name: "volume-0"
+      readOnly: false
+    - mountPath: "/home/jenkins"
+      name: "workspace-volume"
+      readOnly: false
+    workingDir: "/home/jenkins"
+  hostNetwork: false
+  nodeSelector:
+    kubernetes.io/os: "linux"
+  restartPolicy: "Never"
+  serviceAccount: "jenkins2"
+  volumes:
+  - hostPath:
+      path: "/var/run/docker.sock"
+    name: "volume-0"
+  - emptyDir:
+      medium: ""
+    name: "workspace-volume"
+"""
+      }
+    }
+
+    environment {
+      GOPATH = "${env.WORKSPACE}"
+      GO111MODULE = "off"
+      PROJECT_PATH = "${env.GOPATH}/src/xxx.com/ats/ats"
+      REGISTRY_CREDS = credentials('harbor')
+    }
+
+    options {
+        checkoutToSubdirectory('src/xxx.com/ats/ats/')
+    }
+
+    stages {
+      stage('Build Binary File') {
+        steps {
+          echo "... Build Binary File ... "
+          sh 'printenv'
+          sh 'go version'
+          sh 'cd ${PROJECT_PATH}/ && go build -v -o build/backend/backend .'
+        }
+      }
+
+      stage('Build Docker Image') {
+        steps {
+          container('jnlp') {
+            echo "... Build Docker Image ... "
+            sh 'cd ${PROJECT_PATH}/build/backend/ && cp -r ${PROJECT_PATH}/static . && docker build -t core.harbor.xxx.com/ats/backend:v2.0.0 .'
+          }
+        }
+      }
+
+      stage('Push Docker Image') {
+        steps {
+          container('jnlp') {
+            echo "... Push Docker Image ... "
+            sh 'curl -u "${REGISTRY_CREDS_USR}:${REGISTRY_CREDS_PSW}" -k -X DELETE -H "Content-Type: application/json" "https://core.harbor.xxx.com/api/repositories/ats/backend/tags/v2.0.0"'
+            sh 'docker login -u ${REGISTRY_CREDS_USR} -p ${REGISTRY_CREDS_PSW} core.harbor.xxx.com'
+            sh 'docker push core.harbor.xxx.com/ats/backend:v2.0.0'
+            sh 'docker logout core.harbor.xxx.com'
+          }
+        }
+      }
+
+      stage('Clean Local Build Docker Image') {
+        steps {
+          container('jnlp') {
+            echo "... Clean Local Temp Docker Image ... "
+            sh 'docker rmi core.harbor.xxx.com/ats/backend:v2.0.0'
+          }
+        }
+      }
+
+      stage('Update Deploy To Kubernetes') {
+        steps {
+          container('jnlp') {
+            echo "... Delete Deploy From Kubernetes ... "
+            sh 'kubectl delete -f ${PROJECT_PATH}/deploy/static/test/04-backend/03-deployment.yaml'
+            sh 'kubectl delete -f ${PROJECT_PATH}/deploy/static/test/04-backend/02-configmap.yaml'
+            echo "... Create Deploy To Kubernetes ... "
+            sh 'kubectl create -f ${PROJECT_PATH}/deploy/static/test/04-backend/02-configmap.yaml'
+            sh 'kubectl create -f ${PROJECT_PATH}/deploy/static/test/04-backend/03-deployment.yaml'
+          }
+        }
+      }
+
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            echo 'Backend Pipeline Execute Successfully.'
+        }
+        failure {
+            echo 'Backend Pipeline Execute Failure.'
+        }
+    }
+}
+
+pipeline {
+    agent {
+      kubernetes {
+        yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    jenkins: "jenkins-agent-jnlp-nodejs"
+    jenkins/label: "jenkins-agent-jnlp-nodejs"
+spec:
+  containers:
+  - image: "core.harbor.xxx.com/jenkins/jenkins-inbound-agent-nodejs:4.6-1-10.23.2"
+    imagePullPolicy: "Always"
+    name: "jnlp"
+    tty: true
+    volumeMounts:
+    - mountPath: "/var/run/docker.sock"
+      name: "volume-0"
+      readOnly: false
+    - mountPath: "/home/jenkins"
+      name: "workspace-volume"
+      readOnly: false
+    workingDir: "/home/jenkins"
+  hostNetwork: false
+  nodeSelector:
+    kubernetes.io/os: "linux"
+  restartPolicy: "Never"
+  serviceAccount: "jenkins2"
+  volumes:
+  - hostPath:
+      path: "/var/run/docker.sock"
+    name: "volume-0"
+  - emptyDir:
+      medium: ""
+    name: "workspace-volume"
+"""
+      }
+    }
+
+    environment {
+      REGISTRY_CREDS = credentials('harbor')
+    }
+
+    stages {
+      stage('Build Frontend Code') {
+        steps {
+            container('jnlp') {
+              echo "... Build Vue Code ... "
+              sh 'printenv'
+              sh 'node -v'
+              sh 'npm -v'
+              sh 'npm config set registry https://mirrors.huaweicloud.com/repository/npm/ && npm i node-sass --sass_binary_site=https://mirrors.huaweicloud.com/node-sass/ && npm install && npm run test'
+            }
+        }
+      }
+      stage('Build Docker Image') {
+        steps {
+          container('jnlp') {
+            echo "... Build Docker Image ... "
+            sh 'docker build -t core.harbor.xxx.com/ats/frontend:v2.0.0 -f container/build/frontend/Dockerfile .'
+          }
+        }
+      }
+
+      stage('Push Docker Image') {
+        steps {
+          container('jnlp') {
+            echo "... Push Docker Image ... "
+            sh 'curl -u "${REGISTRY_CREDS_USR}:${REGISTRY_CREDS_PSW}" -k -X DELETE -H "Content-Type: application/json" "https://core.harbor.xxx.com/api/repositories/ats/frontend/tags/v2.0.0"'
+            sh 'docker login -u ${REGISTRY_CREDS_USR} -p ${REGISTRY_CREDS_PSW} core.harbor.xxx.com'
+            sh 'docker push core.harbor.xxx.com/ats/frontend:v2.0.0'
+            sh 'docker logout core.harbor.xxx.com'
+          }
+        }
+      }
+
+      stage('Clean Local Build Docker Image') {
+        steps {
+          container('jnlp') {
+            echo "... Clean Local Temp Docker Image ... "
+            sh 'docker rmi core.harbor.xxx.com/ats/frontend:v2.0.0'
+          }
+        }
+      }
+
+      stage('Update Deploy To Kubernetes') {
+        steps {
+          container('jnlp') {
+            echo "... Delete Deploy From Kubernetes ... "
+            sh 'kubectl delete -f container/deploy/frontend/static/02-deployment.yaml'
+            sh 'kubectl delete -f container/deploy/frontend/static/01-configmap.yaml'
+            echo "... Create Deploy To Kubernetes ... "
+            sh 'kubectl create -f container/deploy/frontend/static/01-configmap.yaml'
+            sh 'kubectl create -f container/deploy/frontend/static/02-deployment.yaml'
+          }
+        }
+      }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            echo 'Frontend Pipeline Execute Successfully.'
+        }
+        failure {
+            echo 'Frontend Pipeline Execute Failure.'
+        }
+
+    }
+}
+
